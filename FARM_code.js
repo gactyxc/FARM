@@ -266,6 +266,8 @@ var VH_slopeST = VHslope_trans.lte(1);
 var VH_slopeTG = VHslope_grow.gte(1);
 var features_slope = VH_slopeST.and(VH_slopeTG).rename('slope').toInt16();
 var s1_features = s1VH_std.addBands(s1VH_median).addBands(s1VV_min).addBands(s1VH_grow_min).addBands(features_slope);
+/*
+!!! change the region should firstly export the feature to your Asset using the export code
 // Export the S1 features for the SNIC and samples selection
 Export.image.toAsset({
   image: s1_features,
@@ -276,7 +278,8 @@ Export.image.toAsset({
   //crs: 'EPSG:32633',
   maxPixels: 1e10
 });
-//******* step 2: get the rice and non-rice objects based on SNIC  ------ 
+*/
+//******* step 2: get the land cover objects based on SNIC  ------ 
 // SNIC
 var s1_features = ee.Image("users/feature_selected/s1features");
 var SNIC_features = s1_features.select('VHyear_std','VHyear_median','VVyear_min');
@@ -292,7 +295,46 @@ var inputsSNIC = {
 var snic = ee.Algorithms.Image.Segmentation.SNIC(inputsSNIC)
                   .reproject(SNIC_features.select(0).projection(),null,10);
 var SNIC_objects = snic.select('clusters');
-// get the rice and non-rice objects 
+
+//******* step 3 (option step): get the T1 and T2 value for sample selection  ------ 
+var addVIs = function(image){
+  var ndvi = image.normalizedDifference(['NIR', 'R']).rename('NDVI');
+  var ndwi = image.normalizedDifference(['G', 'NIR']).rename('NDWI');
+  return image.addBands(ndvi).addBands(ndwi);
+}
+var start_data ='2021-08-01';
+var end_data ='2022-08-01';
+var s2sr_imgCol = Sentinel_2_collection(start_data,end_data,roi);
+s2sr_imgCol = s2sr_imgCol.map(addVIs);
+var NDVI_max = s2sr_imgCol.select('NDVI').reduce(ee.Reducer.percentile([98])).clip(roi);
+var NDWI_max = s2sr_imgCol.select('NDWI').reduce(ee.Reducer.percentile([98])).clip(roi);
+// get the v value of vagetation objects and w value of temporal water objects
+var vegetation_mask = NDVI_max.gt(0.4);
+var water_mask = NDWI_max.gt(0.4);
+var temporalWater_mask = vegetation_mask.multiply(water_mask);
+var medianYear_VH = s1_features.select('VHyear_median').clip(roi);
+var T1_image = medianYear_VH.updateMask(temporalWater_mask);
+var T1_value = T1_image.reduceRegion({
+  reducer: ee.Reducer.percentile([50]),
+  geometry: roi,
+  scale: 10,
+  maxPixels: 1e9,
+  tileScale: 16
+});
+var T1 = T1_value.get('VHyear_median');
+print('T1',T1);
+var minGrow_VH = s1_features.select('VHgrow_min').clip(roi); //VV is just for the wrong name in previous step
+var T2_image = minGrow_VH.updateMask(vegetation_mask);
+var T2_value = T2_image.reduceRegion({
+  reducer: ee.Reducer.percentile([25]),
+  geometry: roi,
+  scale: 10,
+  maxPixels: 1e13
+});
+var T2 = T2_value.get('VHgrow_min');
+print('T2',T2);
+
+//******* step 4: get the rice and non-rice objects  ------ 
 var features_VH = s1_features.select('VHyear_median','VHgrow_min');
 var features_slope = s1_features.select('slope');
 var object_VH = features_VH.addBands(SNIC_objects).reduceConnectedComponents(ee.Reducer.mean(),'clusters',256);
@@ -300,8 +342,8 @@ var object_slope_rice = features_slope.addBands(SNIC_objects).reduceConnectedCom
 var object_slope_nonRice = features_slope.addBands(SNIC_objects).reduceConnectedComponents(ee.Reducer.anyNonZero(),'clusters',256);
 // constract the rules to get the rice and non-rice objects mask
 // the code for getting the T1 and T2 value was provided by stpe A1 in the final 
-var T1 = -20;
-var T2 = -20;
+var T1 = -20; // Default value
+var T2 = -20; // Default value
 var criterion1 = object_VH.select('VHyear_median').gte(T1).and(object_VH.select('VHgrow_min').lte(T2));
 var criterion2 = object_slope_rice.select('slope').eq(1);
 var rice_mask = criterion1.and(criterion2).rename('rice_mask');
@@ -322,7 +364,7 @@ var nonRice_polygon = non_riceMask.reduceToVectors({
   scale: 10,
   maxPixels: 1e8
 });
-//******* step 3: classification using the multi-RF ------ 
+//******* step 5: classification using the multi-RF ------ 
 // Generate random points within the sample area.
 var rice_samples = ee.FeatureCollection.randomPoints({
   region: rice_polygon,
