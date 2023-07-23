@@ -322,7 +322,7 @@ var T1_value = T1_image.reduceRegion({
   tileScale: 16
 });
 var T1 = T1_value.get('VHyear_median');
-print('T1',T1);
+//print('T1',T1);
 var minGrow_VH = s1_features.select('VHgrow_min').clip(roi); //VV is just for the wrong name in previous step
 var T2_image = minGrow_VH.updateMask(vegetation_mask);
 var T2_value = T2_image.reduceRegion({
@@ -332,7 +332,7 @@ var T2_value = T2_image.reduceRegion({
   maxPixels: 1e13
 });
 var T2 = T2_value.get('VHgrow_min');
-print('T2',T2);
+//print('T2',T2);
 
 //******* step 4: get the rice and non-rice objects  ------ 
 var features_VH = s1_features.select('VHyear_median','VHgrow_min');
